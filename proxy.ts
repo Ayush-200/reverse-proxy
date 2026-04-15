@@ -1,6 +1,6 @@
 import express from 'express';
 import httpProxy from 'http-proxy'; 
-import { getContainerIp } from './resolver';
+import { getContainerIp } from './resolver.js';
 import { IncomingMessage, ServerResponse } from 'node:http';
 const app = express();
 const PORT = process.env.PORT;
