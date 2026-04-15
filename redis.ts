@@ -13,6 +13,7 @@ const redis = new Redis({
 });
 
 redis.on('connect', () => {
+  console.log(process.env.REDIS_PASSWORD)
   console.log('✅ Redis connected successfully');
 });
 
