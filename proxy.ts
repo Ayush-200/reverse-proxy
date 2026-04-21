@@ -18,41 +18,38 @@ proxy.on("error", ((err: Error, req: IncomingMessage, res: ServerResponse) => {
 );
 
 app.use(async (req, res) => {
-    try{
-        const url = req.url;
-        
-        if(!url){
-            console.error('invalid host url sent');
-            return;
-        }
-        const parts = url?.split('/').filter(Boolean);
-        const workspaceId = parts[0];
-        const port = parts[1];
+  try {
+    const url = req.url || "/";
+    const parts = url.split('/').filter(Boolean);
 
-        if(!workspaceId || !port){
-            return res.status(404).json({message:"workspace id or port not found"});
-        }
-        
-        const containerIp = await getContainerIp(workspaceId);
+    const workspaceId = parts[0];
+    const port = parts[1];
 
-        if (!containerIp) {
-            return res.status(404).send("Workspace not found");
-        }
-
-        const target = `http://${containerIp}:${port}`;
-        req.url = url.replace(`/${workspaceId}/${port}`, '') || '/';
-
-        proxy.web(req, res, {
-            target: target, 
-            changeOrigin: true
-        } )
-
-
+    if (!workspaceId || !port) {
+      return res.status(404).json({ message: "workspace id or port not found" });
     }
-    catch(error){
-        res.status(500).json({message: "error occured in app in reverse proxy"});
+
+    const containerIp = await getContainerIp(workspaceId);
+    if (!containerIp) {
+      return res.status(404).send("Workspace not found");
     }
-})
+
+    const target = `http://${containerIp}:${port}`;
+
+    // ✅ safer rewrite
+    req.url = url.replace(`/${workspaceId}/${port}`, '') || '/';
+    if (!req.url.startsWith('/')) req.url = '/' + req.url;
+
+    proxy.web(req, res, {
+      target,
+      changeOrigin: true,
+      ws: true
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: "error occured in app in reverse proxy" });
+  }
+});
 
 const server = app.listen(PORT, ()=> {
     console.log(`proxy server is running on port ${PORT}`);
