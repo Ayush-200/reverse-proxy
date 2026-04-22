@@ -1,100 +1,91 @@
 import express from 'express';
-import httpProxy from 'http-proxy';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 import { getContainerIp } from './resolver.js';
-import { IncomingMessage, ServerResponse } from 'node:http';
+
 const app = express();
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 3000;
 
-const proxy = httpProxy.createProxyServer({});
-
-proxy.on("error", ((err: Error, req: IncomingMessage, res: ServerResponse) => {
-    console.error("error occurred in proxy", err.message);
-
-    if (res && !res.headersSent) {
-        res.writeHead(502, { "Content-Type": "text/plain" });
-        res.end("Bad gateway");
-    }
-}) as any
-);
-
-app.use(async (req, res) => {
+// ✅ The "Magic" Middleware: Identifies the target BEFORE the proxy runs
+app.use('/:workspaceId/:port', async (req: any, res, next) => {
     try {
-        const url = req.url || "/";
-        const parts = url.split('/').filter(Boolean);
-
-        const workspaceId = parts[0];
-        const port = parts[1];
-
+        const { workspaceId, port } = req.params;
+        
         if (!workspaceId || !port) {
-            return res.status(404).json({ message: "workspace id or port not found" });
+            return res.status(400).send("Missing workspace ID or port");
         }
 
         const containerIp = await getContainerIp(workspaceId);
+
         if (!containerIp) {
             return res.status(404).send("Workspace not found");
         }
 
-        const target = `http://${containerIp}:${port}`;
-
-        // ✅ safer rewrite
-        req.url = url.replace(`/${workspaceId}/${port}`, '') || '/';
-        if (!req.url.startsWith('/')) req.url = '/' + req.url;
-
-        proxy.web(req, res, {
-            target,
-            changeOrigin: true,
-            ws: true
-        });
-
+        // Attach info to the req object so the proxy can see it
+        req.proxyTarget = `http://${containerIp}:${port}`;
+        req.proxyPrefix = `/${workspaceId}/${port}`;
+        
+        // Pass control to the proxy
+        next();
     } catch (error) {
-        res.status(500).json({ message: "error occured in app in reverse proxy" });
+        console.error('Error in proxy middleware:', error);
+        return res.status(500).send("Internal proxy error");
     }
 });
 
-const server = app.listen(PORT, () => {
-    console.log(`proxy server is running on port ${PORT}`);
-})
-
-server.on("upgrade", async (req, socket, head) => {
-    try {
-        const url = req.url || "/";
-
-        if (!url) {
-            console.error("invalid url");
-            return;
+const dynamicProxy = createProxyMiddleware({
+    target: 'http://localhost', 
+    changeOrigin: true,
+    ws: true,
+    router: (req: any) => {
+        return req.proxyTarget || 'http://localhost';
+    },
+    pathRewrite: (path, req: any) => {
+        const rewritten = path.replace(req.proxyPrefix || '', '') || '/';
+        console.log(`Rewriting: ${path} -> ${rewritten}`);
+        return rewritten;
+    },
+    on: {
+        proxyReq: (proxyReq, req) => {
+            proxyReq.setHeader('x-forwarded-host', req.headers.host || '');
+            proxyReq.setHeader('x-forwarded-proto', 'http');
+        },
+        error: (err, req, res: any) => {
+            console.error("Proxy Error:", err.message);
+            if (res && 'writeHead' in res && !res.headersSent) {
+                res.writeHead(502, { "Content-Type": "text/plain" });
+                res.end("Bad Gateway: Container unreachable");
+            }
         }
+    },
+    logger: console,
+});
 
-        const parts = url?.split('/').filter(Boolean);
+// Apply the proxy after the middleware
+app.use('/:workspaceId/:port', dynamicProxy);
+
+const server = app.listen(PORT, () => {
+    console.log(`🚀 Proxy server running on port ${PORT}`);
+});
+
+// ✅ WebSocket Fix: Must still parse URL because req.params isn't available here
+server.on('upgrade', async (req: any, socket, head) => {
+    try {
+        const parts = req.url?.split('/').filter(Boolean) || [];
         const workspaceId = parts[0];
         const port = parts[1];
 
-        if (!workspaceId || !port) {
-            socket.destroy();
-            return;
+        if (workspaceId && port) {
+            const containerIp = await getContainerIp(workspaceId);
+            if (containerIp) {
+                req.proxyTarget = `http://${containerIp}:${port}`;
+                req.proxyPrefix = `/${workspaceId}/${port}`;
+                // @ts-ignore
+                return dynamicProxy.upgrade(req, socket, head);
+            }
         }
-
-        const containerIp = await getContainerIp(workspaceId);
-        if (!containerIp) {
-            socket.destroy();
-            return;
-        }
-        const prefix = `/${workspaceId}/${port}`;
-
-        if (url === prefix || url === prefix + "/") {
-            req.url = "/"; // only for exact root
-        } else {
-            req.url = url.replace(prefix, '');
-        }
-
-        if (!req.url.startsWith('/')) {
-            req.url = '/' + req.url;
-        }
-        proxy.ws(req, socket, head, {
-            target: `http://${containerIp}:${port}`
-        });
-
-
-    } catch (err) {
+        socket.destroy();
+    } catch (error) {
+        console.error('WebSocket upgrade error:', error);
         socket.destroy();
     }
-})
+});
