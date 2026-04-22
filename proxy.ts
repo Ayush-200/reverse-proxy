@@ -44,10 +44,37 @@ const dynamicProxy = createProxyMiddleware({
         console.log(`Rewriting: ${path} -> ${rewritten}`);
         return rewritten;
     },
+    selfHandleResponse: true, // We'll handle the response ourselves
     on: {
         proxyReq: (proxyReq, req) => {
             proxyReq.setHeader('x-forwarded-host', req.headers.host || '');
             proxyReq.setHeader('x-forwarded-proto', 'http');
+        },
+        proxyRes: (proxyRes, req: any, res) => {
+            const contentType = proxyRes.headers['content-type'] || '';
+            
+            // Only modify HTML responses
+            if (contentType.includes('text/html')) {
+                let body = '';
+                proxyRes.on('data', (chunk: Buffer) => {
+                    body += chunk.toString();
+                });
+                proxyRes.on('end', () => {
+                    // Inject base tag to fix relative paths
+                    const baseTag = `<base href="${req.proxyPrefix}/">`;
+                    body = body.replace('<head>', `<head>${baseTag}`);
+                    
+                    res.writeHead(proxyRes.statusCode || 200, {
+                        ...proxyRes.headers,
+                        'content-length': Buffer.byteLength(body)
+                    });
+                    res.end(body);
+                });
+            } else {
+                // For non-HTML, just pipe through
+                res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+                proxyRes.pipe(res);
+            }
         },
         error: (err, req, res: any) => {
             console.error("Proxy Error:", err.message);
