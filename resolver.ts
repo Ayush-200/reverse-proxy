@@ -1,18 +1,25 @@
 import redis from './redis';
 
-export async function getContainerIp(workspaceId: string) {
-    const data = await redis.get(`workspace:${workspaceId}`); 
-    if(!data){
-        throw new Error(`Workspace ID ${workspaceId} is not valid. Unable to find the data in Redis`);
-    }
-    
-    const parsedData = JSON.parse(data);
-    const containerIp = parsedData.ip; // Changed from containerIp to ip
+export async function getContainerIp(workspaceId: string): Promise<string | null> {
+    try {
+        const data = await redis.get(`workspace:${workspaceId}`); 
+        if(!data){
+            console.error(`❌ Workspace ID ${workspaceId} not found in Redis`);
+            return null;
+        }
+        
+        const parsedData = JSON.parse(data);
+        const containerIp = parsedData.ip;
 
-    if(!containerIp){
-        throw new Error(`Unable to find container IP in Redis for workspace ${workspaceId}`);
+        if(!containerIp){
+            console.error(`❌ No IP found for workspace ${workspaceId}`);
+            return null;
+        }
+        
+        console.log(`✅ Retrieved container IP for workspace ${workspaceId}: ${containerIp}`);
+        return containerIp;
+    } catch (error) {
+        console.error(`❌ Error retrieving workspace ${workspaceId}:`, error);
+        return null;
     }
-    
-    console.log(`✅ Retrieved container IP for workspace ${workspaceId}: ${containerIp}`);
-    return containerIp;
 }

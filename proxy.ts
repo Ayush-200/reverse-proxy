@@ -24,7 +24,7 @@ function parseHost(host: string) {
   };
 }
 
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
   try {
     const host = req.headers.host;
 
@@ -40,7 +40,7 @@ const server = http.createServer((req: IncomingMessage, res: ServerResponse) => 
       return res.end("Invalid subdomain format");
     }
 
-    const targetIP = getContainerIp(workspaceId);
+    const targetIP = await getContainerIp(workspaceId);
 
     if (!targetIP) {
       res.writeHead(404);
@@ -67,21 +67,26 @@ server.listen(3001, "0.0.0.0", () => {
   console.log("Reverse proxy running on port 3001");
 });
 
-server.on("upgrade", (req: IncomingMessage, socket: Socket, head: Buffer) => {
-  const host = req.headers.host;
-  
-  if (!host) {
+server.on("upgrade", async (req: IncomingMessage, socket: Socket, head: Buffer) => {
+  try {
+    const host = req.headers.host;
+    
+    if (!host) {
+      socket.destroy();
+      return;
+    }
+    
+    const { port, workspaceId } = parseHost(host);
+
+    const targetIP = await getContainerIp(workspaceId);
+    const target = `ws://${targetIP}:${port}`;
+
+    proxy.ws(req, socket, head, {
+      target,
+      changeOrigin: true,
+    });
+  } catch (err) {
+    console.error('WebSocket upgrade error:', err);
     socket.destroy();
-    return;
   }
-  
-  const { port, workspaceId } = parseHost(host);
-
-  const targetIP = getContainerIp(workspaceId);
-  const target = `ws://${targetIP}:${port}`;
-
-  proxy.ws(req, socket, head, {
-    target,
-    changeOrigin: true,
-  });
 });
