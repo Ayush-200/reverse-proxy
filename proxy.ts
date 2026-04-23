@@ -2,7 +2,7 @@ import { getContainerIp } from "./resolver";
 import * as http from "http";
 import { IncomingMessage, ServerResponse } from "http";
 import { Socket } from "net";
-const httpProxy = require("http-proxy");
+import httpProxy from "http-proxy";
 
 const proxy = httpProxy.createProxyServer({});
 
